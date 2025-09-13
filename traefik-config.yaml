@@ -6,4 +6,4 @@ metadata:
 spec:
   valuesContent: |-
     additionalArguments:
-      - "--entrypoints.kafka.address=:9092"
+      - "--entrypoints.kafka.address=:9095"
