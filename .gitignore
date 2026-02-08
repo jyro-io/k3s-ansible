@@ -8,3 +8,4 @@ playbook/debug.yml
 PR_DESCRIPTION.md
 
 .become
+vault.yml

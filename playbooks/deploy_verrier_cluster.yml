@@ -1,0 +1,103 @@
+---
+# ansible-playbook deploy_verrier_cluster.yml -i inventory.yml --become --become-pass-file=.become
+
+- name: Deploy Julia Project Verrier from GitHub Repository
+  hosts: all
+  become_user: rory  # Run as user 'rory' (non-root)
+  vars:
+    repo_url: "https://github.com/roryl23/Verrier"  # Replace with your GitHub repository URL
+    repo_branch: "1.0.0"  # Or a specific tag/commit
+    deploy_dir: "/home/rory/src/roryl23/Verrier"  # Target directory on each host
+    julia_version: "1.12.4"  # Specify desired Julia version
+    juliaup_bin: "/home/rory/.juliaup/bin/juliaup"  # juliaup location
+    julia_bin: "/home/rory/.juliaup/bin/julia"      # juliaup-managed symlink
+    private_registry_url: "https://{{ github_token }}@github.com/jyro-io/JuliaRegistry.git"
+
+  tasks:
+    - name: Ensure deployment directory exists
+      file:
+        path: "{{ deploy_dir }}"
+        state: directory
+        owner: rory
+        group: rory
+        mode: '0755'
+
+    - name: Clone or update the GitHub repository
+      git:
+        repo: "https://{{ github_token }}@github.com/roryl23/Verrier.git"
+        dest: "{{ deploy_dir }}"
+        version: "{{ repo_branch | default('main') }}"
+        update: yes
+        force: yes
+
+    - name: Check if juliaup is installed
+      stat:
+        path: "{{ juliaup_bin }}"
+      register: juliaup_installed
+
+    - name: Install juliaup (non-interactive)
+      when: not juliaup_installed.stat.exists
+      shell: |
+        curl -fsSL https://install.julialang.org | sh -s -- -y
+      environment:
+        PATH: "/home/rory/.local/bin:{{ ansible_env.PATH }}"
+
+    - name: Add/update specified Julia version via juliaup
+      shell: |
+        {{ juliaup_bin }} add {{ julia_version }}
+        {{ juliaup_bin }} default {{ julia_version }}
+      environment:
+        PATH: "/home/rory/.local/bin:{{ ansible_env.PATH }}"
+
+    - name: Verify Julia version
+      command: "{{ julia_bin }} --version"
+      register: julia_version_output
+
+    - name: Display Julia version
+      debug:
+        msg: "Julia {{ julia_version_output.stdout }} successfully installed via juliaup"
+
+    - name: Add private registry non-interactively using HTTPS token
+      shell: |
+        {{ julia_bin }} -e '
+          using Pkg
+          token = get(ENV, "github_token", "")
+          if !isempty(token)
+            registry_url = "https://\$token@github.com/jyro-io/JuliaRegistry.git"
+            try
+              Pkg.Registry.add(RegistrySpec(url = registry_url))
+              println("Private registry added successfully")
+            catch e
+              println("Failed to add private registry: ", e)
+            end
+          else
+            println("No github_token provided; skipping private registry")
+          end
+        '
+      environment:
+        github_token: "{{ github_token }}"
+        PATH: "/home/rory/.local/bin:{{ ansible_env.PATH }}"
+
+    - name: Install Julia project dependencies
+      shell: |
+        {{ julia_bin }} --project="{{ deploy_dir }}" -e 'using Pkg; Pkg.instantiate()'
+      args:
+        chdir: "{{ deploy_dir }}"
+      environment:
+        PATH: "/home/rory/.local/bin:{{ ansible_env.PATH }}"
+
+    - name: Precompile Julia project for performance
+      shell: |
+        {{ julia_bin }} --project="{{ deploy_dir }}" -e 'using Pkg; Pkg.precompile()'
+      args:
+        chdir: "{{ deploy_dir }}"
+      environment:
+        PATH: "/home/rory/.local/bin:{{ ansible_env.PATH }}"
+
+    - name: Final verification
+      command: "{{ julia_bin }} --version"
+      register: final_julia_version
+
+    - name: Display final Julia version
+      debug:
+        msg: "Deployment complete: Julia {{ final_julia_version.stdout }} ready at {{ deploy_dir }}"
